@@ -1,7 +1,7 @@
 """Overseerr API client for MCP server."""
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import aiohttp
 from pydantic import ValidationError
@@ -352,8 +352,50 @@ class OverseerrClient:
             # Request all seasons by default for TV
             payload["seasons"] = "all"
 
+        # A successful POST is not safe to retry: Overseerr may create the
+        # request but return an incomplete response (notably without "id").
+        submitted_at = datetime.now(timezone.utc)
         data = await self._request("POST", "/request", json=payload)
-        return RequestResponse(**data)
+        if "id" in data:
+            return RequestResponse(**data)
+
+        # Reconcile the incomplete response against freshly created requests.
+        # This is read-only and never sends a second POST.
+        try:
+            candidates = []
+            for skip in (0, 100, 200):
+                requests_data = await self._request(
+                    "GET", "/request", params={"take": 100, "skip": skip, "sort": "added"}
+                )
+                page = requests_data.get("results", [])
+                for item in page:
+                    media = item.get("media") or {}
+                    created_at = item.get("createdAt")
+                    if not created_at or item.get("type") != media_type.value:
+                        continue
+                    if media.get("tmdbId") != tmdb_id:
+                        continue
+                    created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    if created >= submitted_at - timedelta(seconds=5):
+                        candidates.append(item)
+                if len(page) < 100:
+                    break
+            if len(candidates) == 1:
+                return RequestResponse(**candidates[0])
+        except (OverseerrError, ValueError, TypeError, KeyError, ValidationError) as exc:
+            raise OverseerrError(
+                "Request POST was accepted but its response lacked an ID; "
+                "read-only verification failed. The request may exist: "
+                "check Overseerr before retrying."
+            ) from exc
+
+        raise OverseerrError(
+            "Request POST was accepted but its response lacked an ID; "
+            "could not uniquely verify the created request. "
+            "Check Overseerr before retrying."
+        )
 
     async def get_movie_details(self, tmdb_id: int) -> dict:
         """Get movie details by TMDB ID."""
