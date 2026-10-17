@@ -61,6 +61,13 @@ class OverseerrClient:
 
         try:
             async with session.request(method, url, **kwargs) as response:
+                # Seerr returns 201 when a media request was created. A 202
+                # (e.g. "No seasons available to request") is not success.
+                if method == "POST" and endpoint == "/request" and response.status != 201:
+                    body = await response.text()
+                    raise OverseerrError(
+                        f"Request was not confirmed as created (HTTP {response.status}): {body}"
+                    )
                 if response.status == 401:
                     raise OverseerrError("Invalid API key")
                 if response.status == 404:
