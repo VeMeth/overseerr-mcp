@@ -57,7 +57,7 @@ async def test_unverified_result_never_repeats_post():
         {"results": []},
     ])
 
-    with pytest.raises(OverseerrError, match="may exist"):
+    with pytest.raises(OverseerrError, match="could not uniquely verify"):
         await client.request_media(MediaType.TV, 315154)
 
     assert [call.args[0] for call in client._request.await_args_list] == ["POST", "GET"]
