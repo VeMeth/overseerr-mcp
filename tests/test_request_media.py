@@ -75,3 +75,55 @@ async def test_multiple_possible_new_requests_are_not_guessed():
         await client.request_media(MediaType.TV, 315154)
 
     assert [call.args[0] for call in client._request.await_args_list] == ["POST", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_http_202_does_not_validate_as_created_request():
+    """HTTP 202 is not a created request, even when it has JSON media fields."""
+    from unittest.mock import MagicMock
+    from src.tools.overseerr_client import OverseerrError
+
+    client = OverseerrClient(base_url="http://unused", api_key="test")
+    response = MagicMock()
+    response.status = 202
+    response.text = AsyncMock(return_value='{"type":"tv","media":{"tmdbId":315154}}')
+
+    class ResponseContext:
+        async def __aenter__(self):
+            return response
+
+        async def __aexit__(self, *args):
+            return False
+
+    session = MagicMock()
+    session.request.return_value = ResponseContext()
+    client._get_session = AsyncMock(return_value=session)
+
+    with pytest.raises(OverseerrError, match="HTTP 202"):
+        await client._request("POST", "/request", json={"mediaType": "tv", "mediaId": 315154})
+
+    response.json.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_http_201_parses_created_request():
+    from unittest.mock import MagicMock
+
+    client = OverseerrClient(base_url="http://unused", api_key="test")
+    response = MagicMock()
+    response.status = 201
+    response.json = AsyncMock(return_value=request_record())
+
+    class ResponseContext:
+        async def __aenter__(self):
+            return response
+
+        async def __aexit__(self, *args):
+            return False
+
+    session = MagicMock()
+    session.request.return_value = ResponseContext()
+    client._get_session = AsyncMock(return_value=session)
+
+    result = await client._request("POST", "/request", json={"mediaType": "tv", "mediaId": 315154})
+    assert result["id"] == 760
