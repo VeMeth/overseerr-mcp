@@ -326,6 +326,7 @@ async def request_media(
     tmdb_id: int,
     media_type: str,
     seasons: Optional[str] = None,
+    tvdb_id: Optional[int] = None,
 ) -> dict:
     """Request a movie or TV show to be added to Plex.
 
@@ -338,6 +339,7 @@ async def request_media(
         tmdb_id: TMDB ID of the movie or TV show (from search results)
         media_type: "movie" or "tv"
         seasons: For TV shows - comma-separated season numbers (e.g., "1,2,3") or "all"
+        tvdb_id: Explicit TVDB match from lookup_sonarr_series (TV only)
 
     Returns:
         Request confirmation with title, status, and request ID
@@ -355,6 +357,9 @@ async def request_media(
             details = await client.get_tv_details(tmdb_id)
             title = details.get("name", "Unknown")
             year = str(details.get("firstAirDate", ""))[:4] or None
+
+        if tvdb_id is not None and (mt != MediaType.TV or tvdb_id <= 0):
+            raise ToolError("tvdb_id must be a positive TVDB ID for TV requests")
 
         # For TV shows, determine seasons to request
         season_list = None
@@ -381,7 +386,26 @@ async def request_media(
                     "Please specify which seasons to request (e.g., seasons=\"1,2\" or seasons=\"all\")"
                 )
 
-        result = await client.request_media(mt, tmdb_id, seasons=season_list)
+        # Seerr requires a TVDB match for some series; do not guess when
+        # Sonarr returns multiple possible matches.
+        if mt == MediaType.TV and tvdb_id is None:
+            tvdb_id = details.get("externalIds", {}).get("tvdbId")
+            if not tvdb_id:
+                matches = await client.lookup_sonarr_series(tmdb_id)
+                unique = {m.get("tvdbId"): m for m in matches if isinstance(m, dict) and isinstance(m.get("tvdbId"), int) and m["tvdbId"] > 0}
+                if len(unique) != 1:
+                    options = [
+                        {"tvdb_id": key, "title": val.get("title"), "year": val.get("year")}
+                        for key, val in list(unique.items())[:6]
+                    ]
+                    raise ToolError(
+                        f"TVDB match required for TMDB {tmdb_id}. "
+                        f"Sonarr candidates: {options}. "
+                        "Use lookup_sonarr_series and explicitly select tvdb_id before requesting. "
+                        "No request was submitted."
+                    )
+                tvdb_id = next(iter(unique))
+        result = await client.request_media(mt, tmdb_id, seasons=season_list, tvdb_id=tvdb_id)
 
         response = {
             "success": True,
@@ -402,6 +426,26 @@ async def request_media(
         raise ToolError(f"Invalid input: {str(e)}")
     except Exception as e:
         raise ToolError(f"Unexpected error: {str(e)}")
+
+
+@mcp.tool()
+async def lookup_sonarr_series(tmdb_id: int) -> dict:
+    """Find Seerr/Sonarr TVDB matches for a TV series by TMDB ID.
+
+    Returns available TVDB candidates; inspect them before passing tvdb_id
+    to request_media. Never submit a request from this read-only tool.
+    """
+    try:
+        matches = await get_client().lookup_sonarr_series(tmdb_id)
+        return {
+            "tmdb_id": tmdb_id,
+            "matches": [
+                {"tvdb_id": m.get("tvdbId"), "title": m.get("title"), "year": m.get("year"), "overview": m.get("overview")}
+                for m in matches if isinstance(m, dict)
+            ],
+        }
+    except OverseerrError as e:
+        raise ToolError(f"Sonarr lookup failed: {e}")
 
 
 @mcp.tool()
