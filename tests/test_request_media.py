@@ -127,3 +127,31 @@ async def test_http_201_parses_created_request():
 
     result = await client._request("POST", "/request", json={"mediaType": "tv", "mediaId": 315154})
     assert result["id"] == 760
+
+
+@pytest.mark.asyncio
+async def test_explicit_tvdb_id_is_sent_to_seerr():
+    client = OverseerrClient(base_url="http://unused", api_key="test")
+    client._request = AsyncMock(return_value=request_record())
+    await client.request_media(MediaType.TV, 315154, seasons=[1], tvdb_id=474563)
+    payload = client._request.await_args.kwargs["json"]
+    assert payload["mediaId"] == 315154
+    assert payload["tvdbId"] == 474563
+    assert payload["seasons"] == [1]
+
+
+@pytest.mark.asyncio
+async def test_movie_does_not_send_tvdb_id():
+    client = OverseerrClient(base_url="http://unused", api_key="test")
+    client._request = AsyncMock(return_value={**request_record(), "type": "movie"})
+    await client.request_media(MediaType.MOVIE, 123, tvdb_id=474563)
+    assert "tvdbId" not in client._request.await_args.kwargs["json"]
+
+
+@pytest.mark.asyncio
+async def test_sonarr_lookup_is_read_only():
+    client = OverseerrClient(base_url="http://unused", api_key="test")
+    candidates = [{"tvdbId": 474563, "title": "Example"}]
+    client._request = AsyncMock(return_value=candidates)
+    assert await client.lookup_sonarr_series(315154) == candidates
+    assert client._request.await_args.args == ("GET", "/service/sonarr/lookup/315154")

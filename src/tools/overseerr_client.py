@@ -349,9 +349,12 @@ class OverseerrClient:
         media_type: MediaType,
         tmdb_id: int,
         seasons: Optional[list[int]] = None,
+        tvdb_id: Optional[int] = None,
     ) -> RequestResponse:
         """Request a movie or TV show."""
         payload = {"mediaType": media_type.value, "mediaId": tmdb_id}
+        if media_type == MediaType.TV and tvdb_id is not None:
+            payload["tvdbId"] = tvdb_id
 
         if media_type == MediaType.TV and seasons:
             payload["seasons"] = seasons
@@ -411,6 +414,13 @@ class OverseerrClient:
     async def get_tv_details(self, tmdb_id: int) -> dict:
         """Get TV show details by TMDB ID."""
         return await self._request("GET", f"/tv/{tmdb_id}")
+
+    async def lookup_sonarr_series(self, tmdb_id: int) -> list[dict]:
+        """Seerr's TVDB matching candidates for a TMDB series."""
+        data = await self._request("GET", f"/service/sonarr/lookup/{tmdb_id}")
+        if not isinstance(data, list):
+            raise OverseerrError("Unexpected Seerr Sonarr lookup response")
+        return data
 
     async def get_issues(
         self,
